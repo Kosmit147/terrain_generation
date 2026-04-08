@@ -1,0 +1,3 @@
+[submodule "vendor/glue"]
+	path = vendor/glue
+	url = https://github.com/Kosmit147/glue.git
