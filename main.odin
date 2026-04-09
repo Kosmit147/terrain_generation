@@ -30,7 +30,7 @@ main :: proc() {
 	context.logger = log.create_console_logger(.Debug when ODIN_DEBUG else .Info)
 	defer log.destroy_console_logger(context.logger)
 
-	if !glue.init(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, maximized = true) {
+	if !glue.init(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, maximized = true, vsync = false, fps_limit = 120) {
 		log.panic("Failed to init glue.")
 	}
 	defer glue.deinit()
@@ -81,9 +81,9 @@ main :: proc() {
 		}
 
 		imgui.Begin("Info")
-		io := imgui.GetIO()
 		imgui.TextUnformatted(fmt.ctprintf("Camera position: %v", camera.position))
-		imgui.TextUnformatted(fmt.ctprintf("FPS: %v", io.Framerate))
+		imgui_io := imgui.GetIO()
+		imgui.TextUnformatted(fmt.ctprintf("FPS: %v", imgui_io.Framerate))
 		imgui.End()
 
 		if !glue.cursor_enabled() {
