@@ -24,7 +24,9 @@ WINDOW_HEIGHT :: 1080
 BASE_MOVEMENT_SPEED :: 100
 SHIFT_SPEEDUP :: 5
 MOUSE_SENSITIVITY :: 1
-TERRAIN_SCALE :: Vec3{ 5, 5, 5 }
+DEFAULT_TERRAIN_SCALE :: 5
+DEFAULT_TERRAIN_MESH_WIDTH :: 800
+DEFAULT_TERRAIN_MESH_HEIGHT :: 800
 
 main :: proc() {
 	context.logger = log.create_console_logger(.Debug when ODIN_DEBUG else .Info)
@@ -60,8 +62,13 @@ main :: proc() {
 	glue.use_shader(terrain_shader)
 	gl.ClearColor(0, 0, 0, 1)
 
-	terrain_mesh := create_terrain_mesh(800, 800, DEFAULT_TERRAIN_GENERATION_PARAMS)
+	terrain_mesh_size := [2]u32{ DEFAULT_TERRAIN_MESH_WIDTH, DEFAULT_TERRAIN_MESH_HEIGHT }
+	terrain_scale: f32 = DEFAULT_TERRAIN_SCALE
+	terrain_params := DEFAULT_TERRAIN_GENERATION_PARAMS
+	terrain_mesh := create_terrain_mesh(terrain_mesh_size.x, terrain_mesh_size.y, terrain_params)
 	defer destroy_terrain_mesh(&terrain_mesh)
+
+	wireframe_enabled := false
 
 	prev_time := glue.time()
 
@@ -75,8 +82,14 @@ main :: proc() {
 		for event in glue.pop_event() {
 			#partial switch event in event {
 			case glue.Key_Pressed_Event:
-				if event.key == .Escape do glue.close_window()
-				else if event.key == .Left_Control do glue.set_cursor_enabled(!glue.cursor_enabled())
+				if event.key == .Escape {
+					glue.close_window()
+				} else if event.key == .Left_Control {
+					glue.set_cursor_enabled(!glue.cursor_enabled())
+				} else if event.key == .F_1 {
+					wireframe_enabled = !wireframe_enabled
+					set_wireframe_enabled(wireframe_enabled)
+				}
 			}
 		}
 
@@ -84,6 +97,34 @@ main :: proc() {
 		imgui.TextUnformatted(fmt.ctprintf("Camera position: %v", camera.position))
 		imgui_io := imgui.GetIO()
 		imgui.TextUnformatted(fmt.ctprintf("FPS: %v", imgui_io.Framerate))
+		imgui.End()
+
+		imgui.Begin("Settings")
+		if imgui.BeginTabBar("Settings Tab Bar") {
+			if imgui.BeginTabItem("Terrain") {
+				imgui_input_uint2("Mesh Resolution", &terrain_mesh_size)
+				imgui.DragFloat("Mesh Scale", &terrain_scale, v_speed = 0.01, v_min = 0, v_max = 1000)
+				imgui_drag_double("Smoothness",
+						  &terrain_params.smoothness,
+						  v_speed = 0.001,
+						  v_min = 0.001,
+						  v_max = 1)
+				if imgui.Button("Regenerate mesh") {
+					destroy_terrain_mesh(&terrain_mesh)
+					terrain_mesh = create_terrain_mesh(terrain_mesh_size.x,
+									   terrain_mesh_size.y,
+									   terrain_params)
+				}
+				imgui.EndTabItem()
+			}
+			if imgui.BeginTabItem("Renderer") {
+				if imgui.Checkbox("Wireframe", &wireframe_enabled) {
+					set_wireframe_enabled(wireframe_enabled)
+				}
+				imgui.EndTabItem()
+			}
+			imgui.EndTabBar()
+		}
 		imgui.End()
 
 		if !glue.cursor_enabled() {
@@ -102,7 +143,7 @@ main :: proc() {
 		if glue.key_pressed(.A) do camera.position -= camera_vectors.right   * movement_speed * dt
 		if glue.key_pressed(.D) do camera.position += camera_vectors.right   * movement_speed * dt
 
-		model: Mat4 = linalg.matrix4_scale(TERRAIN_SCALE)
+		model: Mat4 = linalg.matrix4_scale(Vec3{ terrain_scale, terrain_scale, terrain_scale })
 		view := linalg.matrix4_look_at(eye = camera.position,
 					       centre = camera.position + camera_vectors.forward,
 					       up = camera_vectors.up)
@@ -121,4 +162,8 @@ main :: proc() {
 		glue.end_frame()
 		free_all(context.temp_allocator)
 	}
+}
+
+set_wireframe_enabled :: proc(enabled: bool) {
+	gl.PolygonMode(gl.FRONT_AND_BACK, gl.LINE if enabled else gl.FILL)
 }

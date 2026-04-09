@@ -1,7 +1,5 @@
 package terrain_generation
 
-import "base:runtime"
-
 import "vendor/glue"
 import gl "vendor:OpenGL"
 
@@ -12,7 +10,7 @@ import "core:log"
 
 GENERATOR_SEED :: 0
 
-Terrain_Mesh_Vertex :: struct {
+Terrain_Mesh_Vertex :: struct #all_or_none {
 	position: Vec3,
 }
 
@@ -82,9 +80,11 @@ generate_terrain_mesh :: proc(width, height: u32,
 
 	for y in 0..<height {
 		for x in 0..<width {
-			coord := linalg.array_cast([2]u32{ x, y }, f64)
-			height := noise.noise_2d(GENERATOR_SEED, coord * params.smoothness)
-			append(&vertices, Terrain_Mesh_Vertex{ position = { f32(coord.x), height, f32(coord.y) } })
+			height := get_height({ x, y }, params)
+			vertex := Terrain_Mesh_Vertex {
+				position = { f32(x), height, f32(y) },
+			}
+			append(&vertices, vertex)
 		}
 	}
 
@@ -106,4 +106,11 @@ generate_terrain_mesh :: proc(width, height: u32,
 free_terrain_mesh_data :: proc(mesh: Terrain_Mesh_Data) {
 	delete(mesh.vertices)
 	delete(mesh.indices)
+}
+
+@(private="file")
+get_height :: proc(coordinate: [2]u32, params: Terrain_Generation_Params) -> f32 {
+	coord_f64 := linalg.array_cast([2]u32{ coordinate.x, coordinate.y }, f64)
+	height := noise.noise_2d(GENERATOR_SEED, coord_f64 * params.smoothness)
+	return height
 }
