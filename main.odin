@@ -5,118 +5,72 @@ import "vendor/glue/vendor/imgui"
 import gl "vendor:OpenGL"
 
 import "core:log"
-import "core:slice"
 import "core:math"
 import "core:math/linalg"
+import "core:fmt"
 
 Vec2 :: [2]f32
 Vec3 :: [3]f32
 Vec4 :: [4]f32
 Mat4 :: matrix[4, 4]f32
 
-Vertex :: struct {
-	position: Vec2,
-}
+@(rodata) vertex_source := #load("terrain.vert", string)
+@(rodata) fragment_source := #load("terrain.frag", string)
 
-@(rodata)
-vertex_format := [?]glue.Vertex_Attribute{
-	.Float_2,
-}
-
-VERTEX_SOURCE ::
-`
-#version 460 core
-
-layout (location = 0) in vec2 in_position;
-
-uniform mat4 projection;
-uniform mat4 view;
-uniform mat4 model;
-
-void main() {
-	gl_Position = projection * view * model * vec4(in_position, 0.0, 1.0);
-}
-`
-
-FRAGMENT_SOURCE ::
-`
-#version 460 core
-
-uniform vec4 quad_color;
-
-out vec4 out_color;
-
-void main() {
-	out_color = quad_color;
-}
-`
-
-@(rodata)
-quad_vertices := [4]Vertex{
-	{ position = { -0.5, -0.5 } },
-	{ position = { -0.5,  0.5 } },
-	{ position = {  0.5,  0.5 } },
-	{ position = {  0.5, -0.5 } },
-}
-
-@(rodata)
-quad_indices := [6]u32{ 0, 1, 2, 0, 2, 3 }
-
-WINDOW_TITLE  :: "Example"
+WINDOW_TITLE  :: "Terrain Generation"
 WINDOW_WIDTH  :: 1920
 WINDOW_HEIGHT :: 1080
-WINDOW_ASPECT_RATIO :: 1920.0 / 1080.0
+
+BASE_MOVEMENT_SPEED :: 100
+SHIFT_SPEEDUP :: 5
+MOUSE_SENSITIVITY :: 1
+TERRAIN_SCALE :: Vec3{ 5, 5, 5 }
 
 main :: proc() {
 	context.logger = log.create_console_logger(.Debug when ODIN_DEBUG else .Info)
 	defer log.destroy_console_logger(context.logger)
 
-	if !glue.init(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE) do log.panic("Failed to create a window")
+	if !glue.init(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, maximized = true) {
+		log.panic("Failed to init glue.")
+	}
 	defer glue.deinit()
 
 	glue.set_cursor_enabled(false)
 	glue.set_raw_mouse_motion_enabled(true)
 
-	vertex_array: glue.Vertex_Array
-	glue.create_vertex_array(&vertex_array)
-	defer glue.destroy_vertex_array(&vertex_array)
+	gl.Enable(gl.DEPTH_TEST)
+	gl.Enable(gl.CULL_FACE)
+	gl.CullFace(gl.BACK)
+	gl.FrontFace(gl.CCW)
+	gl.Disable(gl.BLEND)
 
-	vertex_buffer: glue.Gl_Buffer
-	glue.create_static_gl_buffer_with_data(&vertex_buffer, slice.to_bytes(quad_vertices[:]))
-	defer glue.destroy_gl_buffer(&vertex_buffer)
-
-	index_buffer: glue.Gl_Buffer
-	glue.create_static_gl_buffer_with_data(&index_buffer, slice.to_bytes(quad_indices[:]))
-	defer glue.destroy_gl_buffer(&index_buffer)
-
-	shader, shader_ok := glue.create_shader(VERTEX_SOURCE, FRAGMENT_SOURCE)
-	if !shader_ok do log.panic("Failed to compile the shader.")
-	defer glue.destroy_shader(shader)
+	terrain_shader, terrain_shader_ok := glue.create_shader(vertex_source, fragment_source)
+	if !terrain_shader_ok do log.panic("Failed to compile the terrain shader.")
+	defer glue.destroy_shader(terrain_shader)
 
 	camera := glue.Camera {
-		position = { 0, 0, 2 },
-		yaw = math.to_radians(f32(-90.0)),
+		position = { 0, 50, 0 },
+		yaw = math.to_radians(f32(45.0)),
 	}
 
-	model_uniform := glue.get_uniform(shader, "model", Mat4)
-	view_uniform := glue.get_uniform(shader, "view", Mat4)
-	projection_uniform := glue.get_uniform(shader, "projection", Mat4)
-	quad_color_uniform := glue.get_uniform(shader, "quad_color", Vec4)
+	model_uniform := glue.get_uniform(terrain_shader, "model", Mat4)
+	view_uniform := glue.get_uniform(terrain_shader, "view", Mat4)
+	projection_uniform := glue.get_uniform(terrain_shader, "projection", Mat4)
 
-	glue.bind_vertex_array(vertex_array)
-	glue.set_vertex_array_format(vertex_array, vertex_format[:])
-	glue.bind_vertex_buffer(vertex_array, vertex_buffer, size_of(Vertex))
-	glue.bind_index_buffer(vertex_array, index_buffer)
-	glue.use_shader(shader)
+	glue.use_shader(terrain_shader)
 	gl.ClearColor(0, 0, 0, 1)
 
-	quad_color := glue.WHITE
-	glue.set_uniform(shader, quad_color_uniform, quad_color)
+	terrain_mesh := create_terrain_mesh(800, 800, DEFAULT_TERRAIN_GENERATION_PARAMS)
+	defer destroy_terrain_mesh(&terrain_mesh)
 
 	prev_time := glue.time()
 
 	for !glue.window_should_close() {
 		glue.begin_frame()
+
+		time := glue.time()
+		dt := f32(time - prev_time)
+		prev_time = time
 
 		for event in glue.pop_event() {
 			#partial switch event in event {
@@ -126,47 +80,43 @@ main :: proc() {
 			}
 		}
 
-		time := glue.time()
-		dt := f32(time - prev_time)
-		prev_time = time
-
-		imgui.Begin("Window")
-		if imgui.ColorEdit4("Quad color", &quad_color) {
-			glue.set_uniform(shader, quad_color_uniform, quad_color)
-		}
+		imgui.Begin("Info")
+		io := imgui.GetIO()
+		imgui.TextUnformatted(fmt.ctprintf("Camera position: %v", camera.position))
+		imgui.TextUnformatted(fmt.ctprintf("FPS: %v", io.Framerate))
 		imgui.End()
 
 		if !glue.cursor_enabled() {
-			LOOK_SPEED :: 1
 			cursor_position_delta := linalg.array_cast(glue.cursor_position_delta(), f32)
-			camera.yaw += cursor_position_delta.x * LOOK_SPEED * 0.001
-			camera.pitch += -cursor_position_delta.y * LOOK_SPEED * 0.001
+			camera.yaw += cursor_position_delta.x * MOUSE_SENSITIVITY * 0.001
+			camera.pitch += -cursor_position_delta.y * MOUSE_SENSITIVITY * 0.001
 			camera.pitch = clamp(camera.pitch, math.to_radians(f32(-89)), math.to_radians(f32(89)))
 		}
 
 		camera_vectors := glue.camera_vectors(camera)
 
-		MOVEMENT_SPEED :: 5
-		if glue.key_pressed(.W) do camera.position += camera_vectors.forward * MOVEMENT_SPEED * dt
-		if glue.key_pressed(.S) do camera.position -= camera_vectors.forward * MOVEMENT_SPEED * dt
-		if glue.key_pressed(.A) do camera.position -= camera_vectors.right   * MOVEMENT_SPEED * dt
-		if glue.key_pressed(.D) do camera.position += camera_vectors.right   * MOVEMENT_SPEED * dt
+		movement_speed: f32 = BASE_MOVEMENT_SPEED
+		if glue.key_pressed(.Left_Shift) do movement_speed *= SHIFT_SPEEDUP
+		if glue.key_pressed(.W) do camera.position += camera_vectors.forward * movement_speed * dt
+		if glue.key_pressed(.S) do camera.position -= camera_vectors.forward * movement_speed * dt
+		if glue.key_pressed(.A) do camera.position -= camera_vectors.right   * movement_speed * dt
+		if glue.key_pressed(.D) do camera.position += camera_vectors.right   * movement_speed * dt
 
-		model: Mat4 = 1
+		model: Mat4 = linalg.matrix4_scale(TERRAIN_SCALE)
 		view := linalg.matrix4_look_at(eye = camera.position,
 					       centre = camera.position + camera_vectors.forward,
 					       up = camera_vectors.up)
 		projection := linalg.matrix4_perspective(fovy = math.to_radians(f32(45)),
-							 aspect = WINDOW_ASPECT_RATIO,
+							 aspect = glue.window_aspect_ratio(),
 							 near = 0.1,
-							 far = 1000)
+							 far = 10000) // 10000 might be too high.
 
-		glue.set_uniform(shader, model_uniform, model)
-		glue.set_uniform(shader, view_uniform, view)
-		glue.set_uniform(shader, projection_uniform, projection)
+		glue.set_uniform(terrain_shader, model_uniform, model)
+		glue.set_uniform(terrain_shader, view_uniform, view)
+		glue.set_uniform(terrain_shader, projection_uniform, projection)
 
-		gl.Clear(gl.COLOR_BUFFER_BIT)
-		gl.DrawElements(gl.TRIANGLES, len(quad_indices), glue.gl_index(u32), nil)
+		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		draw_terrain_mesh(terrain_mesh)
 
 		glue.end_frame()
 		free_all(context.temp_allocator)
